@@ -467,14 +467,14 @@ pkg_upgrade()
 
 	elif [ "${PRDPLATFORM}" = "x64-full" ]; then
 		# Set current version.
-		P7ZIP=$(pkg info | grep ${APPNAME} | cut -d'-' -f2 | tr -d '.' | cut -d' ' -f1)
+		P7ZIP=$(pkg info | grep ${APPNAME} | awk 'NR==1' | egrep -o "([0-9]{1,}\.)+[0-9]{1,}" | tr -d '.')
 
 		# Issue p7zip upgrade command in Full platforms. 
 		pkg upgrade -y ${APPNAME} || \
 		error_notify "Error: A problem has occurred while upgrading ${APPNAME}."
 
 		# Set new version.
-		NEWP7ZIP=$(pkg info | grep ${APPNAME} | cut -d'-' -f2 | tr -d '.' | cut -d' ' -f1)
+		NEWP7ZIP=$(pkg info | grep ${APPNAME} | awk 'NR==1' | egrep -o "([0-9]{1,}\.)+[0-9]{1,}" | tr -d '.')
 		if [ "${NEWP7ZIP}" -gt "${P7ZIP}" ]; then
 			echo "New ${APPNAME} package found and upgraded!"
 		else
