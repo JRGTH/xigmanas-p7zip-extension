@@ -1,0 +1,659 @@
+#!/bin/sh
+# p7zip-init
+# A simple p7zip add-on for XigmaNAS Embedded x64 11.x and later.
+# License: BSD2CLAUSE (BSD 2-clause Simplified License).
+# Debug script
+#set -x
+
+# Copyright (c) 2020 José Rivera (JoseMR)
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that following conditions are met:
+# 1. Redistributions of source code must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+# 2. Redistributions in binary form must reproduce the above copyright
+#    notice, this list of conditions and the following disclaimer in the
+#    documentation and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS 'AS IS' AND ANY
+# EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+# WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE FOR ANY
+# DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+# (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+# LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+# ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+# THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+# Set environment.
+PATH=${PATH}:/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin
+
+# Determine full working directory.
+CWDIR=$(dirname $(realpath $0))
+
+# Global variables.
+PLATFORM=$(uname -m)
+PRODUCT=$(uname -i)
+PRDVERSION=$(uname -r | cut -d '-' -f1 | tr -d '.')
+PRDPLATFORM=$(cat /etc/platform)
+SCRIPTNAME=$(basename $0)
+CONFIG="/cf/conf/config.xml"
+APPNAME="p7zip"
+APPRARCODEC="p7zip-codec-rar"
+EXTLOGFILE="${CWDIR}/log/${APPNAME}_ext.log"
+P7ZIPLOGFILE=${EXTLOGFILE}
+FULLAPPNAME="${APPNAME}-addon"
+PKGCONF="/etc/pkg/FreeBSD.conf"
+USRLOCAL="/usr/local"
+APPPATH="${USRLOCAL}/bin"
+APPBIN="7z"
+WWWPATH="/usr/local/www"
+P7ZIPCONF="/conf/p7zip_config"
+P7ZIPCONFLINK="/var/etc/p7zipconf"
+INSTALLPATH="${CWDIR}/${FULLAPPNAME}"
+BRANCH="master"
+GITURL="https://github.com/JRGTH/xigmanas-${APPNAME}-extension/archive/${BRANCH}.zip"
+VERFILE="https://raw.githubusercontent.com/JRGTH/xigmanas-${APPNAME}-extension/${BRANCH}/version"
+
+error_notify()
+{
+	# Log/notify message on error and exit.
+	MSG="$*"
+	logger -t "${SCRIPTNAME}" "${MSG}"
+	echo -e "$*" >&2; exit 1
+}
+
+runtime_config()
+{
+	# Create required directories if missing.
+	if [ ! -d "${CWDIR}/conf" ]; then
+		mkdir -p ${CWDIR}/conf
+	fi
+	if [ ! -d "${CWDIR}/log" ]; then
+		mkdir -p ${CWDIR}/log
+	fi
+	if [ ! -d "${CWDIR}/locale-p7zip" ]; then
+		mkdir -p ${CWDIR}/locale-p7zip
+	fi
+}
+
+update_freebsdconf()
+{
+	# Update FreeBSD.conf to fetch latest packages.
+	if [ -f "${PKGCONF}" ]; then 
+		if grep -q "quarterly" ${PKGCONF}; then
+			sed -i '' -E "s/quarterly/latest/g" ${PKGCONF} || \
+			error_notify "Error: A problem has occurred while updating FreeBSD.conf file."
+		fi
+	fi
+}
+
+p7zip_native_download()
+{
+	# Install latest p7zip package.
+	if ! pkg info | grep -q ${APPNAME}; then
+		# Check if p7zip already exist.
+		if [ ! -f "${APPPATH}/${APPBIN}" ]; then
+			update_freebsdconf
+			pkg install -y ${APPNAME} ${APPRARCODEC} || error_notify "Error: A problem has occurred while fetching ${APPNAME}."
+		fi
+	fi
+}
+
+p7zip_initial_download()
+{
+	# Check if p7zip already exist.
+	if [ ! -f "${CWDIR}/${FULLAPPNAME}/${APPPATH}/${APPBIN}" ]; then
+		# Fetch p7zip package.
+		update_freebsdconf
+		pkg fetch -y -o ${CWDIR}/download ${APPNAME} ${APPRARCODEC} || \
+		error_notify "Error: A problem has occurred while fetching ${APPNAME}."
+		p7zip_pkg_extract
+	fi
+}
+
+p7zip_pkg_extract()
+{
+	# Extract fetched package for Embedded platform.
+	if [ ! -f "${CWDIR}/${FULLAPPNAME}/${APPNAME}/+MANIFEST" ]; then
+		echo "Extracting ${APPNAME}..."
+		tar -Jxf ${CWDIR}/download/All/${APPNAME}-[0-9]*.txz -C ${CWDIR}/${FULLAPPNAME}/ || \
+		error_notify "Error: A problem has occurred while extractig ${APPNAME} files."
+		mkdir -p ${CWDIR}/${FULLAPPNAME}/${APPNAME}
+		mv ${CWDIR}/${FULLAPPNAME}/+* ${CWDIR}/${FULLAPPNAME}/${APPNAME}
+		rm ${CWDIR}/download/All/${APPNAME}-[0-9]*.txz
+		echo "Done!"
+	fi
+
+	if [ ! -f "${CWDIR}/${FULLAPPNAME}/${APPRARCODEC}/+MANIFEST" ]; then
+		echo "Extracting ${APPRARCODEC}..."
+		tar -Jxf ${CWDIR}/download/All/${APPRARCODEC}-[0-9]*.txz -C ${CWDIR}/${FULLAPPNAME}/ || \
+		error_notify "Error: A problem has occurred while extractig ${APPRARCODEC} files."
+		mkdir -p ${CWDIR}/${FULLAPPNAME}/${APPRARCODEC}
+		mv ${CWDIR}/${FULLAPPNAME}/+* ${CWDIR}/${FULLAPPNAME}/${APPRARCODEC}
+		rm ${CWDIR}/download/All/${APPRARCODEC}-[0-9]*.txz
+		echo "Done!"
+	fi
+}
+
+ext_initial_download()
+{
+	# Always ensure the version file is present, otherwise update the extension files on startup.
+	if [ ! -f "${CWDIR}/version" ]; then
+		echo "Fetching and extracting extension files..."
+		mkdir -p ${CWDIR}/update
+		fetch -ao ${CWDIR}/update --no-verify-peer --timeout=30 ${GITURL} || \
+		error_notify "Error: A problem has occurred while fetching extension package."
+		tar -xf ${CWDIR}/update/${BRANCH}.zip --exclude='.git*' --strip-components 1 -C ${CWDIR}/update
+		chmod +x ${CWDIR}/update/${SCRIPTNAME}
+		cp -Rf ${CWDIR}/update/* ${CWDIR}/
+		rm -R ${CWDIR}/update
+		rm -f ${CWDIR}/${BRANCH}.zip
+		echo "Done!"
+	fi
+}
+
+extension_upgrade()
+{
+	# Perform an online extension upgrade.
+	DATE=$(date +"%a %b %d %T %Y")
+	echo "Looking for new extension package!"
+	mkdir -p ${CWDIR}/update
+	fetch -ao ${CWDIR}/update --no-verify-peer --timeout=30 ${VERFILE} || \
+	error_notify "Error: A problem has occurred while fetching version file."
+
+	# Compare version files and fetch latest package if available.
+	if [ -f "${CWDIR}/update/version" ]; then
+		UPDATEVER=$(cat ${CWDIR}/update/version | tr -d .)
+		CURRENTVER=$(cat ${CWDIR}/version | tr -d .)
+		if [ "${UPDATEVER}" -gt "${CURRENTVER}" ]; then
+			echo "New ${FULLAPPNAME} package found, performing upgrade..."
+			fetch -ao ${CWDIR}/update --no-verify-peer --timeout=30 ${GITURL} || \
+			error_notify "Error: A problem has occurred while fetching extension package."
+			tar -xf ${CWDIR}/update/${BRANCH}.zip --exclude='.git*' --strip-components 1 -C ${CWDIR}/update
+			chmod +x ${CWDIR}/update/${SCRIPTNAME}
+			rm -f ${CWDIR}/update/${BRANCH}.zip
+			cp -Rf ${CWDIR}/update/* ${CWDIR}/
+			rm -R ${CWDIR}/update
+			rm -f ${CWDIR}/${BRANCH}.zip
+
+			# Logging the update event.
+			UPDATEVERSION=$(cat ${CWDIR}/version)
+			echo "${DATE}: extension upgraded to ${UPDATEVERSION}" >> ${EXTLOGFILE}
+			echo "Extension package upgrade completed!"
+		else
+			echo "Extension package is on the latest version!"
+			rm -R ${CWDIR}/update
+		fi
+	fi
+}
+
+product_check()
+{
+	# Check for the working product.
+	if [ "${PRODUCT}" = "NAS4FREE-x64" ] || [ "${PRODUCT}" = "XIGMANAS-x64" ]; then
+		postinit_cmd
+		gui_start
+	fi
+}
+
+create_addon_env()
+{
+	# Create required directories.
+	if [ ! -d "${CWDIR}/conf" ]; then
+		mkdir -p ${CWDIR}/conf
+	fi
+	if [ ! -d "${CWDIR}/locale-p7zip" ]; then
+		mkdir -p ${CWDIR}/locale-p7zip
+	fi
+	if [ ! -d "${CWDIR}/download/All" ]; then
+		mkdir -p ${CWDIR}/download/All
+	fi
+	if [ ! -d "${CWDIR}/log" ]; then
+		mkdir -p ${CWDIR}/log
+	fi
+	if [ ! -d "${CWDIR}/${FULLAPPNAME}" ]; then
+		mkdir -p ${CWDIR}/${FULLAPPNAME}
+	fi
+
+	# Link p7zip-init to /usr/local/sbin.
+	if [ ! -f "${USRLOCAL}/sbin/${SCRIPTNAME}" ]; then
+		ln -fs ${CWDIR}/${SCRIPTNAME} ${USRLOCAL}/sbin/${SCRIPTNAME}
+	fi
+}
+
+platform_check()
+{
+	# Check for working platform.
+	if [ "${PRDPLATFORM}" = "x64-embedded" ]; then
+		create_addon_env
+		ext_initial_download
+		p7zip_initial_download
+		sys_symlinkdir
+	elif [ "${PRDPLATFORM}" = "x64-full" ]; then
+		create_addon_env
+		ext_initial_download
+		p7zip_native_download
+		#bin_symlinks
+	fi
+}
+
+bin_symlinks()
+{
+	# Main p7zip symlinks.
+	if [ -d "${INSTALLPATH}/${USRLOCAL}/bin" ]; then
+		cd ${INSTALLPATH}/${USRLOCAL}/bin
+		for file in *
+			do
+				ln -Ffhs ${INSTALLPATH}/${USRLOCAL}/bin/${file} ${USRLOCAL}/bin/${file}
+		done
+	fi
+}
+
+sys_symlinkdir()
+{
+	# Check and create/relink required symlinks/dirs for p7zip.
+	# This environment will be checked each time the script is started for consistency.
+
+	# Required directories for p7zip.
+	if [ ! -d "${USRLOCAL}/share/doc" ]; then
+		mkdir -p ${USRLOCAL}/share/doc
+	fi
+	if [ ! -d "${USRLOCAL}/share/examples" ]; then
+		mkdir -p ${USRLOCAL}/share/examples
+	fi
+	if [ ! -d "${USRLOCAL}/man/man1" ]; then
+		mkdir -p ${USRLOCAL}/man/man1
+	fi
+	if [ ! -d "${USRLOCAL}/share/licenses" ]; then
+		mkdir -p ${USRLOCAL}/share/licenses
+	fi
+
+	bin_symlinks
+
+	# Required symlinks for p7zip.
+	if [ -d "${INSTALLPATH}/${USRLOCAL}/share/doc" ]; then
+		cd ${INSTALLPATH}/${USRLOCAL}/share/doc
+		for file in *
+			do
+				ln -Ffhs ${INSTALLPATH}/${USRLOCAL}/share/doc/${file} ${USRLOCAL}/share/doc/${file}
+		done
+	fi
+	if [ -d "${INSTALLPATH}/${USRLOCAL}/man/man1" ]; then
+		cd ${INSTALLPATH}/${USRLOCAL}/man/man1
+		for file in *
+			do
+				ln -Ffhs ${INSTALLPATH}/${USRLOCAL}/man/man1/${file} ${USRLOCAL}/man/man1/${file}
+		done
+	fi
+	if [ -d "${INSTALLPATH}/${USRLOCAL}/share/examples" ]; then
+		cd ${INSTALLPATH}/${USRLOCAL}/share/examples
+		for file in *
+			do
+				ln -Ffhs ${INSTALLPATH}/${USRLOCAL}/share/examples/${file} ${USRLOCAL}/share/examples/${file}
+		done
+	fi
+	if [ -d "${INSTALLPATH}/${USRLOCAL}/share/licenses" ]; then
+		cd ${INSTALLPATH}/${USRLOCAL}/share/licenses
+		for file in *
+			do
+				ln -Ffhs ${INSTALLPATH}/${USRLOCAL}/share/licenses/${file} ${USRLOCAL}/share/licenses/${file}
+		done
+	fi
+	if [ -d "${INSTALLPATH}/${USRLOCAL}/libexec" ]; then
+		cd ${INSTALLPATH}/${USRLOCAL}/libexec
+		for file in *
+			do
+				ln -Ffhs ${INSTALLPATH}/${USRLOCAL}/libexec/${file} ${USRLOCAL}/libexec/${file}
+		done
+	fi
+}
+
+postinit_cmd()
+{
+	# Check and generate temporary php script for postinit command.
+	if ! grep -qw ${CWDIR}/${SCRIPTNAME} ${CONFIG}; then
+		touch ${CWDIR}/postinit || error_notify "Error: A problem has occurred while creating the postinit file."
+		chmod +x ${CWDIR}/postinit
+		if [ ! "${PRDVERSION}" -ge "110" ]; then
+			# Generate php script for NAS4Free 10.3 versions.
+			cat << EOF > ${CWDIR}/postinit
+<?php
+require_once("config.inc");
+require_once("functions.inc");
+\$cmd = dirname(__FILE__)."/${SCRIPTNAME}";
+	\$i =0;
+	if ( is_array(\$config['rc']['postinit'] ) && is_array( \$config['rc']['postinit']['cmd'] ) ) {
+		for (\$i; \$i < count(\$config['rc']['postinit']['cmd']);) {
+			if (preg_match('/${SCRIPTNAME}/', \$config['rc']['postinit']['cmd'][\$i])) break; ++\$i; }
+	}
+	\$config['rc']['postinit']['cmd'][\$i] = \$config['cmd']."\$cmd";
+	write_config();
+?>
+EOF
+		else
+			# Generate php script for NAS4Free/XigmaNAS 11.x versions.
+			cat << EOF > ${CWDIR}/postinit
+<?php
+require_once("config.inc");
+require_once("functions.inc");
+\$cmd = dirname(__FILE__)."/${SCRIPTNAME}";
+\$name = "p7zip Extension";
+\$comment = "Start ${APPNAME}";
+\$rc = &array_make_branch(\$config,'rc','param'); 
+if(false === array_search_ex(\$name,\$rc,'name')):
+	\$rc_param = [];
+	\$rc_param['uuid'] = uuid();
+	\$rc_param['name'] = \$name;
+	\$rc_param['value'] = \$cmd;
+	\$rc_param['comment'] = \$comment;
+	\$rc_param['typeid'] = '2';
+	\$rc_param['enable'] = true;
+	\$rc[] = \$rc_param;
+	write_config();
+endif;
+unset(\$rc);
+?>
+EOF
+		fi
+
+		# Execute temporary php script.
+		if [ "${OBI_INSTALL}" != "ON" ]; then
+			echo "Creating postinit command..."
+			php-cgi -f ${CWDIR}/postinit && rm ${CWDIR}/postinit || \
+			error_notify "Error: A problem has occurred while executing postinit file."
+			echo "Done!"
+		fi
+		sysrc -f ${CWDIR}${P7ZIPCONF} GUI_ENABLE=YES INSTALL_DIR=${CWDIR} >/dev/null 2>&1
+	fi
+}
+
+gui_start()
+{
+	# Initialize the extension gui.
+	if [ -d "${CWDIR}/gui" ]; then
+		# Always ensure the config directory/file exist.
+		if [ ! -f "${CWDIR}${P7ZIPCONF}" ]; then
+			# Try to restore default configuration.
+			runtime_config
+			# Set default config.
+			sysrc -f ${CWDIR}${P7ZIPCONF} GUI_ENABLE=YES INSTALL_DIR=${CWDIR} >/dev/null 2>&1
+		fi
+		GUI_STATUS=$(sysrc -f ${CWDIR}${P7ZIPCONF} -qn GUI_ENABLE)
+		if [ "${GUI_STATUS}" = "YES" ]; then
+			# Store the installation path and link conf.
+			if ! sysrc -f ${CWDIR}${P7ZIPCONF} -n INSTALL_DIR | grep -q "${CWDIR}"; then
+				sysrc -f ${CWDIR}${P7ZIPCONF} INSTALL_DIR=${CWDIR} >/dev/null 2>&1
+			fi
+			mkdir -p ${P7ZIPCONFLINK}
+			ln -Ffhs ${CWDIR}/conf ${P7ZIPCONFLINK}/conf
+			# Copy the gui files.
+			cp -R ${CWDIR}/gui/* ${WWWPATH}/ || error_notify "Error: A problem has occurred while copying extension gui files."
+		fi
+	fi
+}
+
+gui_enable()
+{
+	# Relink conf and copy the gui files.
+	if [ -d "${CWDIR}/gui" ]; then
+		mkdir -p ${P7ZIPCONFLINK}
+		ln -Ffhs ${CWDIR}/conf ${P7ZIPCONFLINK}/conf
+		sysrc -f ${CWDIR}${P7ZIPCONF} GUI_ENABLE=YES >/dev/null 2>&1
+		cp -R ${CWDIR}/gui/* ${WWWPATH}/ || error_notify "Error: A problem has occurred while copying extension gui files."
+		exit 0
+	else
+		error_notify "Error: Extension gui files not found."
+	fi
+}
+
+gui_disable()
+{
+	# Disable gui if -t option specified.
+	if [ -d "${CWDIR}/gui" ]; then
+		rm -f ${WWWPATH}/p7zip-gui.php
+		rm -Rf ${WWWPATH}/ext/p7zip-gui
+		rm -f ${LOCALSHAREPATH}/locale-p7zip
+		rm -Rf ${P7ZIPCONFLINK}
+		sysrc -f ${CWDIR}${P7ZIPCONF} GUI_ENABLE=NO >/dev/null 2>&1 || error_notify "Error: A problem while removing extension gui files."
+		exit 0
+	else
+		error_notify "Error: Extension gui files not found."
+	fi
+
+	# Remove empty ext folder to prevent empty "Extensions" tab.
+	if [ -d "${WWWPATH}/ext" ]; then
+		if [ ! "$(ls -A ${WWWPATH}/ext)" ]; then
+			rm -R ${WWWPATH}/ext
+		fi
+	fi
+}
+
+pkg_upgrade()
+{
+	# Update FreeBSD.conf file.
+	update_freebsdconf
+
+	# Check for p7zip updates.
+	echo "Looking for new ${APPNAME} package..."
+
+	if [ "${PRDPLATFORM}" = "x64-embedded" ]; then
+		PACKAGELIST="${APPNAME}"
+
+		# To fix pkg: Repository FreeBSD missing. 'pkg update' required on Embedded platforms.
+		pkg upgrade
+
+		# Set product version variables.
+		# We have to use the manifest file for version comparison for Embedded platform.
+		P7ZIP=$(grep '"version":"' ${CWDIR}/${FULLAPPNAME}/${APPNAME}/+MANIFEST | cut -d',' -f3 | egrep -o "([0-9]{1,}\.)+[0-9]{1,}" | tr -d '.')
+		NEWP7ZIP=$(pkg search ${APPNAME} | awk 'NR==1' | egrep -o "([0-9]{1,}\.)+[0-9]{1,}" | tr -d '.')
+
+		# Extract new fetched packages for Embedded platform on new version.
+		if [ "${NEWP7ZIP}" -gt "${P7ZIP}" ]; then
+			RESTART=1
+			echo "New ${APPNAME} package found, performing upgrade..."
+			NEWP7ZIP_VER=$(pkg search ${APPNAME} | cut -d'-' -f2 | cut -d' ' -f1)
+			pkg fetch -y -o ${CWDIR}/download ${APPNAME}-${NEWP7ZIP_VER} || \
+			error_notify "Error: A problem has occurred while fetching/locating ${pkg}."
+			echo "Extracting ${APPNAME}-${NEWP7ZIP_VER}..."
+			tar -Jxf ${CWDIR}/download/All/${APPNAME}-${NEWP7ZIP_VER}.txz -C ${CWDIR}/${FULLAPPNAME}/ || \
+			error_notify "Error: A problem has occurred while extractig files."
+			mv ${CWDIR}/${FULLAPPNAME}/+* ${CWDIR}/${FULLAPPNAME}/${APPNAME}/
+		else
+			echo "No new ${APPNAME} package available!"
+		fi
+
+	elif [ "${PRDPLATFORM}" = "x64-full" ]; then
+		# Set current version.
+		P7ZIP=$(pkg info | grep ${APPNAME} | cut -d'-' -f2 | tr -d '.' | cut -d' ' -f1)
+
+		# Issue p7zip upgrade command in Full platforms. 
+		pkg upgrade -y ${APPNAME} || \
+		error_notify "Error: A problem has occurred while upgrading ${APPNAME}."
+
+		# Set new version.
+		NEWP7ZIP=$(pkg info | grep ${APPNAME} | cut -d'-' -f2 | tr -d '.' | cut -d' ' -f1)
+		if [ "${NEWP7ZIP}" -gt "${P7ZIP}" ]; then
+			echo "New ${APPNAME} package found and upgraded!"
+		else
+			echo "No new ${APPNAME} package available!"
+		fi
+	fi
+
+	# Check for extension updates.
+	extension_upgrade
+}
+
+reset_install()
+{
+	# Reset the extension environment.
+	echo "Removing extension files..."
+	if [ -d "${CWDIR}/conf" ]; then
+		rm -rf ${CWDIR}/conf
+	fi
+	if [ -d "${CWDIR}/log" ]; then
+		rm -rf ${CWDIR}/log
+	fi
+	if [ -d "${CWDIR}/locale-p7zip" ]; then
+		rm -rf ${CWDIR}/locale-p7zip
+	fi
+	if [ -d "${CWDIR}/${FULLAPPNAME}" ]; then
+		rm -rf ${CWDIR}/${FULLAPPNAME}
+	fi
+	if [ -d "${CWDIR}/download" ]; then
+		rm -rf ${CWDIR}/download
+	fi
+	if [ -f "${CWDIR}/version" ]; then
+		rm -f ${CWDIR}/version
+	fi
+	runtime_config
+}
+
+remove_addon()
+{
+	# Confirm for addon removal.
+	while :
+		do
+			read -p "Do you wish to proceed with the ${FULLAPPNAME} removal? [y/N]:" yn
+			case ${yn} in
+			[Yy]) break;;
+			[Nn]) exit 0;;
+			esac
+		done
+	echo "Proceeding..."
+
+	if [ -d "${WWWPATH}/p7zip-gui.php" ]; then
+		rm -f ${WWWPATH}/p7zip-gui.php
+		rm -Rf ${WWWPATH}/ext/p7zip-gui
+		rm -f ${LOCALSHAREPATH}/locale-p7zip
+		rm -Rf ${P7ZIPCONFLINK}
+	fi
+
+	# Check for working platform.
+	if [ "${PRDPLATFORM}" = "x64-embedded" ]; then
+		if [ -d "${USRLOCAL}/share/doc/${APPNAME}" ]; then
+			rm -rf ${USRLOCAL}/share/doc/${APPNAME}
+		fi
+		if [ -d "${USRLOCAL}/share/examples/${APPNAME}" ]; then
+			rm -rf ${USRLOCAL}/share/examples/${APPNAME}
+		fi
+		if [ -f "${USRLOCAL}/man/man1/${APPNAME}.1.gz" ]; then
+			rm -f ${USRLOCAL}/man/man1/${APPNAME}.1.gz
+		fi
+		if [ -f "${USRLOCAL}/bin/${APPNAME}" ]; then
+			rm -f ${USRLOCAL}/bin/${APPNAME}
+		fi
+		if [ -f "${USRLOCAL}/bin/${APPNAME}" ]; then
+			rm -f ${USRLOCAL}/bin/${APPNAME}
+		fi
+		if [ -d "${USRLOCAL}/libexec/${APPNAME}" ]; then
+			rm -rf ${USRLOCAL}/libexec/${APPNAME}
+		fi
+		if [ -d "${INSTALLPATH}/${USRLOCAL}/bin" ]; then
+			cd ${INSTALLPATH}/${USRLOCAL}/bin
+			for file in *
+				do
+					if [ -f "${USRLOCAL}/bin/${file}" ]; then
+						rm -rf ${USRLOCAL}/bin/${file}
+					fi
+			done
+		fi
+	elif [ "${PRDPLATFORM}" = "x64-full" ]; then
+		if [ -f "${USRLOCAL}/bin/${APPNAME}" ]; then
+			rm -f ${USRLOCAL}/bin/${APPNAME}
+		fi
+		pkg delete -y ${APPNAME} ${APPRARCODEC}
+	fi
+
+	# Remove addon related files and folders only-
+	# to protect any user-created custom files.
+	FILES="conf download gui locale-p7zip log p7zip-addon README.md postinit release_notes version p7zip-init"
+	for file in ${FILES}; do
+		if [ -f "${CWDIR}/${file}" ] || [ -d "${CWDIR}/${file}" ]; then
+			rm -rf ${CWDIR}/${file}
+		fi
+	done
+
+	if [ ! -f "${USRLOCAL}/sbin/${SCRIPTNAME}" ]; then
+		rm ${USRLOCAL}/sbin/${SCRIPTNAME}
+	fi
+
+	echo "Done!"
+	echo "Please manually remove the p7zip Extension Command Script from the WebGUI."
+	exit 0
+}
+
+get_versions()
+{
+	# Get p7zip-addon extension version.
+	if [ -f "${CWDIR}/version" ]; then
+		APPVERSION=$(cat ${CWDIR}/version)
+	else
+		APPVERSION="version file not found!"
+	fi
+
+	# Display product versions.
+	echo -e "\np7zip version:" && ${USRLOCAL}/bin/7z | awk 'NR==2' | cut -d':' -f1
+	echo -e "\nextension version:"
+	echo "${FULLAPPNAME} ${APPVERSION}"
+	exit 0
+}
+
+exec_status()
+{
+	# Log on startup success, else logging with faults.
+	if [ $? -eq 0 ]; then
+		MSG="script has been started successfully!"
+		logger -t ${SCRIPTNAME} ${MSG}
+	else
+		MSG="script started with faults"
+		logger -t ${SCRIPTNAME} ${MSG}
+	fi
+}
+
+p7zip_init()
+{
+	# Check for system compatibility.
+	if [ ! "${PLATFORM}" = "amd64" ]; then
+		echo "Unsupported platform!"; exit 1
+	fi 
+	# Check for product compatibility.
+	if [ ! "${PRDVERSION}" -ge "110" ]; then
+		echo "Unsupported version!"; exit 1
+	fi
+
+	echo "Initializing ${APPNAME}..."
+
+	# Function calls.
+	platform_check
+	product_check
+	exec_status
+}
+
+# Run-time configuration.
+runtime_config
+
+while getopts ":ouxrvgth" option; do
+	case ${option} in
+		[h]) echo "Usage: ${SCRIPTNAME} -[option]";
+		echo "Options:"
+		echo "        -u  Upgrade p7zip/Add-On packages."
+		echo "        -v  Display product version."
+		echo "        -g  Enables the addon GUI."
+		echo "        -t  Disable the addon GUI."
+		echo "        -x  Reset ${FULLAPPNAME}."
+		echo "        -r  Remove ${FULLAPPNAME}."
+		echo "        -h  Display this help message."; exit 0;;
+		[o]) OBI_INSTALL="ON";; # To prevent nested PHP-CGI call for installation with OBI.
+		[u]) pkg_upgrade;;
+		[x]) reset_install;;
+		[r]) remove_addon;;
+		[v]) get_versions;;
+		[g]) gui_enable; exit 0 ;; # For enable the addon gui.
+		[t]) gui_disable; exit 0 ;; # For disable the addon gui.
+		[?]) echo "Invalid option, -h for usage."; exit 1;;
+	esac
+done
+p7zip_init
