@@ -119,21 +119,21 @@ p7zip_pkg_extract()
 	# Extract fetched package for Embedded platform.
 	if [ ! -f "${CWDIR}/${FULLAPPNAME}/${APPNAME}/+MANIFEST" ]; then
 		echo "Extracting ${APPNAME}..."
-		tar -Jxf ${CWDIR}/download/All/${APPNAME}-[0-9]*.txz -C ${CWDIR}/${FULLAPPNAME}/ || \
+		tar -Jxf ${CWDIR}/download/All/${APPNAME}-[0-9]*.[tp][xk][zg] -C ${CWDIR}/${FULLAPPNAME}/ || \
 		error_notify "Error: A problem has occurred while extractig ${APPNAME} files."
 		mkdir -p ${CWDIR}/${FULLAPPNAME}/${APPNAME}
 		mv ${CWDIR}/${FULLAPPNAME}/+* ${CWDIR}/${FULLAPPNAME}/${APPNAME}
-		rm ${CWDIR}/download/All/${APPNAME}-[0-9]*.txz
+		rm ${CWDIR}/download/All/${APPNAME}-[0-9]*.[tp][xk][zg]
 		echo "Done!"
 	fi
 
 	if [ ! -f "${CWDIR}/${FULLAPPNAME}/${APPRARCODEC}/+MANIFEST" ]; then
 		echo "Extracting ${APPRARCODEC}..."
-		tar -Jxf ${CWDIR}/download/All/${APPRARCODEC}-[0-9]*.txz -C ${CWDIR}/${FULLAPPNAME}/ || \
+		tar -Jxf ${CWDIR}/download/All/${APPRARCODEC}-[0-9]*.[tp][xk][zg] -C ${CWDIR}/${FULLAPPNAME}/ || \
 		error_notify "Error: A problem has occurred while extractig ${APPRARCODEC} files."
 		mkdir -p ${CWDIR}/${FULLAPPNAME}/${APPRARCODEC}
 		mv ${CWDIR}/${FULLAPPNAME}/+* ${CWDIR}/${FULLAPPNAME}/${APPRARCODEC}
-		rm ${CWDIR}/download/All/${APPRARCODEC}-[0-9]*.txz
+		rm ${CWDIR}/download/All/${APPRARCODEC}-[0-9]*.[tp][xk][zg]
 		echo "Done!"
 	fi
 }
@@ -458,7 +458,7 @@ pkg_upgrade()
 			pkg fetch -y -o ${CWDIR}/download ${APPNAME}-${NEWP7ZIP_VER} || \
 			error_notify "Error: A problem has occurred while fetching/locating ${pkg}."
 			echo "Extracting ${APPNAME}-${NEWP7ZIP_VER}..."
-			tar -Jxf ${CWDIR}/download/All/${APPNAME}-${NEWP7ZIP_VER}.txz -C ${CWDIR}/${FULLAPPNAME}/ || \
+			tar -Jxf ${CWDIR}/download/All/${APPNAME}-${NEWP7ZIP_VER}.[tp][xk][zg] -C ${CWDIR}/${FULLAPPNAME}/ || \
 			error_notify "Error: A problem has occurred while extractig files."
 			mv ${CWDIR}/${FULLAPPNAME}/+* ${CWDIR}/${FULLAPPNAME}/${APPNAME}/
 		else

@@ -3,6 +3,7 @@
 ===================
 Version    Description
 
+0.1.3....Quick update to extract .pkg distfiles.
 0.1.2....Fix to don't upgrade all packages at once.
 0.1.1....Improved update code.
 0.1.0....First Public Release.
