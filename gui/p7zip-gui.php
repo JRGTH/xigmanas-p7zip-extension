@@ -137,18 +137,18 @@ function get_version_p7zip() {
 	global $tarballversion, $prdname;
 	if (is_file("{$tarballversion}")) {
 		exec("/bin/cat {$tarballversion}", $result);
-		return ($result[0]);
+		return ($result[0] ?? '');
 	}
 	else {
 		exec("/usr/local/bin/7z | awk 'NR==2' | cut -d':' -f1", $result);
-		return ($result[0]);
+		return ($result[0] ?? '');
 	}
 }
 
 function get_version_ext() {
 	global $versionfile;
 	exec("/bin/cat {$versionfile}", $result);
-	return ($result[0]);
+	return ($result[0] ?? '');
 }
 
 function get_process_pid() {
